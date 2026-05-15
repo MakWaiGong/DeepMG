@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric.loader import DataLoader
-from models import DTANet
+from models import DeepMG
 import numpy as np
 import random
 import time
@@ -25,15 +25,15 @@ import psutil
 
 
 def clear_cuda_memory():
-    gc.collect()                        # 清理Python端无用对象
-    torch.cuda.empty_cache()            # 清空PyTorch缓存的显存
+    gc.collect()
+    torch.cuda.empty_cache()
 
 if torch.cuda.is_available():
     print("CUDA is available.")
 else:
     print("none")
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0' 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 def score1(y_test, y_pred):
     auc_roc_score = roc_auc_score(y_test, y_pred)
@@ -42,7 +42,7 @@ def score1(y_test, y_pred):
     y_pred_print = [round(y, 0) for y in y_pred]
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred_print).ravel()
     se = tp / (tp + fn)
-    sp = tn / (tn + fp)  # 也是R
+    sp = tn / (tn + fp)
     acc = (tp + tn) / (tp + fn + tn + fp)
     mcc = (tp * tn - fn * fp) / math.sqrt((tp + fn) * (tp + fp) * (tn + fn) * (tn + fp))
     P = tp / (tp + fp)
@@ -119,12 +119,7 @@ def main(rank, world_size, start_time, master_port, params):
             j = json.load(f)
         for k in test_metrics.keys():
             j[start_time].update({f"Test{k}": test_metrics[k]})
-        # for k in score.keys():
-        #     j[start_time][f"Score{k}"] = score[k]
 
-        # for k in test_metrics.keys():
-        #     j[start_time].update(
-        #         {f"Test{k}": float(test_metrics[k]) if isinstance(test_metrics[k], np.int64) else test_metrics[k]})
         for k in score.keys():
             j[start_time].update({f"Score{k}": float(score[k]) if isinstance(score[k], np.int64) else score[k]})
 
@@ -134,12 +129,10 @@ def main(rank, world_size, start_time, master_port, params):
 
 
 def sanity_check_graph(data, name="graph"):
-    # data: single Data 或 Batch（torch_geometric.data.Data）
     x = data.x
     edge_index = data.edge_index
     edge_attr = data.edge_attr
 
-    # 基本属性
     N = x.size(0)
     E = edge_index.size(1)
     print(f"[{name}] nodes={N}, feat_dim={x.size(1)}, edges={E}, edge_attr_shape={None if edge_attr is None else tuple(edge_attr.shape)}")
@@ -177,17 +170,13 @@ def train(local_rank, device, writer, params, start_time):
     else:
         train_data, test_data = load_data(params)
 
-    model = DTANet()
+    model = DeepMG()
     model.to(device)
     if local_rank != -1:
         model = DDP(model)
 
     loss_fn = nn.BCELoss()
     optimizer = torch.optim.Adagrad(model.parameters(), lr=params["learning_rate"])
-    # optimizer = torch.optim.Adam(model.parameters(), lr=params["learning_rate"],weight_decay=0.01)
-
-    # tensorboard_callback = TensorBoard(log_dir='./logs', histogram_freq=1, embeddings_freq=1)
-    # model.fit(train_data, y_train, epochs=5, callbacks=[tensorboard_callback])
 
     if local_rank != -1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -241,7 +230,7 @@ def train(local_rank, device, writer, params, start_time):
 
     best_mse = 1000
     best_epoch = -1
-    acc_s = []  # 存储每个 epoch 的准确率
+    acc_s = []
     loss_s = []
     for epoch in range(1, params["max_epoch"] + 1):
 
@@ -265,14 +254,13 @@ def train(local_rank, device, writer, params, start_time):
             loss_list.append(loss.item())
             optimizer.zero_grad()
             loss.backward()
-            optimizer.step()           
+            optimizer.step()
 
         if writer:
             writer.add_scalar("Train Loss", np.mean(loss_list), epoch)
 
         if with_valid:
             if epoch % 1 == 0 :
-            # if epoch % 10 == 0 and epoch >= 150:
                 if local_rank != -1:
                     dist.barrier()
                 model.eval()
@@ -288,7 +276,6 @@ def train(local_rank, device, writer, params, start_time):
 
                         Y = data[3].to(device).view(-1)
 
-                        # valid_bce_obj.update(output, Y)
                         valid_bce=valid_bce_obj(output, Y)
                         valid_loss = valid_loss + valid_bce.item()
                         total_samples += Y.size(0)
@@ -296,14 +283,6 @@ def train(local_rank, device, writer, params, start_time):
 
                 if local_rank != -1:
                     dist.barrier()
-                # valid_mse=0.0
-                # valid_mse = valid_mse+valid_bce.item()
-                # num_batches += 1
-
-                # if local_rank != -1:
-                #     dist.barrier()
-                # valid_mse = float(valid_bce.compute())
-                # valid_bce.reset()
 
                 if writer:
                     writer.add_scalar("Valid Loss", valid_mse, epoch)
@@ -367,7 +346,7 @@ def train(local_rank, device, writer, params, start_time):
     vals = {}
     for k, v in metrics.items():
         if k == "ConfusionMatrix":
-            cm = v.compute()  # 这里会返回 2x2 的混淆矩阵
+            cm = v.compute()
             print(cm)
         else:
             vals[k] = float(v.compute())
@@ -402,10 +381,6 @@ def run(params):
 
     with open("history.json", "r", encoding="utf-8") as f:
             j = json.load(f)
-
-    # keys = ['TN', 'TP', 'FN', 'FP', 'Sensitivity', 'Specificity', 'MCC', 'ACC', 'AUROC', 'F1', 'BA', 'AUPRC', 'PPV', 'NPV']
-    #
-    # score = {key: j[start_time].get(f"Score{key}") for key in keys if f"Score{key}" in j[start_time]}
 
     return (j[start_time]["TestAUROC"], j[start_time]["TestACC"], j[start_time]["TestF1"],j[start_time]["TestAUPRC"],
             j[start_time]["TestPrecision"],j[start_time]["TestRecall"],j[start_time]["TestMCC"],
@@ -453,7 +428,7 @@ if __name__ == "__main__":
     l1_AUPRC = []
     l1_PPV = []
     l1_NPV = []
-    for idx in range(0, 5):    #五折交叉验证
+    for idx in range(0, 5):    # 5-fold cross-validation
         params["fold"] = idx
         score={}
         print("Memory usage (MB)_fold:", psutil.Process().memory_info().rss / 1024 / 1024)
@@ -516,6 +491,3 @@ if __name__ == "__main__":
     print(f"AUPRC: {np.mean(l1_AUPRC):.4f} ({np.std(l1_AUPRC):.4f})")
     print(f"PPV: {np.mean(l1_PPV):.4f} ({np.std(l1_PPV):.4f})")
     print(f"NPV: {np.mean(l1_NPV):.4f} ({np.std(l1_NPV):.4f})")
-
-
-

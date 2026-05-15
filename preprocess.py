@@ -19,12 +19,6 @@ import psutil
 from tqdm import tqdm
 tqdm.pandas()
 
-# ESMModel, ESMAlphabet = esm.pretrained.esm2_t36_3B_UR50D()
-# ESMBatchConverter = ESMAlphabet.get_batch_converter()
-# ESMModel.eval()
-#
-# UniMolClf = UniMolRepr(data_type="molecule", remove_hs=False)
-
 BOND_TYPE = [BondType.SINGLE, BondType.DOUBLE, BondType.TRIPLE, BondType.AROMATIC]
 
 def one_of_k_encoding(x, allowable_set):
@@ -40,17 +34,16 @@ def smis2graphs(smis):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
             print(f"[smis2graphs]Invalid SMILES string: {smi}")
-            continue  # 跳过无效的SMILES，而不是退出程序
+            continue
 
         mol = Chem.AddHs(mol)
         graph = Data()
         atoms = mol.GetAtoms()
         bonds = mol.GetBonds()
 
-        # assert "smi2repr" in locals() and smi in smi2repr, f"[smis2graphs]smi not found: {smi}"
         if smi not in smi2repr:
             print(f"[smis2graphs]SMILES not found in representation: {smi}")
-            continue  # 跳过没有表示的SMILES
+            continue
         graph.x = torch.Tensor(smi2repr[smi]["atomic_reprs"][0])
         if graph.x.shape != (len(atoms), 512):
             print('[smis2graphs]',smi, graph.x.shape, len(atoms))
@@ -71,9 +64,6 @@ def smis2graphs(smis):
                 + [bond.GetIsAromatic(), bond.GetIsConjugated(), bond.IsInRing()]
             )
         graph.edge_index = torch.LongTensor(np.transpose(edge_index))
-        # assert graph.edge_index.shape == (2, len(bonds) * 2), AssertionError(
-        #     "[smis2graphs] Wrong shape of graph.edge_index"
-        # )
         if graph.edge_index.shape != (2, len(bonds) * 2):
             print(f"[smis2graphs] Wrong shape of graph.edge_index for {smi}: {graph.edge_index.shape}, expected (2, {len(bonds) * 2})")
             continue
@@ -159,28 +149,27 @@ def seq2graph_with_prompt(id, seq, prompt_feat, id2repr,proj_layer=nn.Linear(8, 
     graph = Data()
     # Node feature from ESM embedding
     assert id in id2repr
-    x = torch.Tensor(id2repr[id]["token_representations"])  # [L, 2560]
+    x = torch.Tensor(id2repr[id]["token_representations"])
     assert x.shape[1] == 2560
 
     # Prompt embedding
     if isinstance(prompt_feat, np.ndarray):
         prompt_feat = torch.tensor(prompt_feat)
     if prompt_feat.dim() == 1:
-        prompt_feat = prompt_feat.unsqueeze(0)  # [1, d_prompt]
+        prompt_feat = prompt_feat.unsqueeze(0)
 
     if proj_layer is not None:
-        # prompt_feat = proj_layer(prompt_feat)  # project to [1, 2560]
         prompt_feat = proj_layer(prompt_feat.to(proj_layer.weight.device))
 
     # Append prompt as a new node
-    x = torch.cat([x, prompt_feat], dim=0)  # [L+1, 2560]
+    x = torch.cat([x, prompt_feat], dim=0)
     x = x.clone().detach()
 
     # Build edges
     edge_index, edge_attr = distance_map(id, seq)
     L = x.shape[0] - 1
     prompt_edges = [[L, i] for i in range(L)] + [[i, L] for i in range(L)]
-    prompt_edges = torch.LongTensor(prompt_edges).T  # [2, 2L]
+    prompt_edges = torch.LongTensor(prompt_edges).T
     prompt_attr = torch.ones((prompt_edges.shape[1], 1))
 
     # Combine edges
@@ -223,25 +212,25 @@ def seq2graph_with_prompt_save(id, seq, prompt_feat, id2repr, proj_layer=None, p
     graph = Data()
     # Node feature from ESM embedding
     assert id in id2repr, f"{id} not in id2repr"
-    x = torch.Tensor(id2repr[id]["token_representations"])  # [L_token, 2560]
+    x = torch.Tensor(id2repr[id]["token_representations"])
     L_token = x.shape[0]
 
     # Prompt embedding
     if isinstance(prompt_feat, np.ndarray):
         prompt_feat = torch.tensor(prompt_feat)
     if prompt_feat.dim() == 1:
-        prompt_feat = prompt_feat.unsqueeze(0)  # [1, d_prompt]
+        prompt_feat = prompt_feat.unsqueeze(0)
 
     if proj_layer is not None:
         prompt_feat = proj_layer(prompt_feat.to(next(proj_layer.parameters()).device))
 
     # Append prompt as a new node
-    x = torch.cat([x, prompt_feat], dim=0)  # [L_token + 1, 2560]
+    x = torch.cat([x, prompt_feat], dim=0)
 
     # Build edges
     edge_index, edge_attr = distance_map(id, seq)
-    # 安全处理: 如果 residues 数量 < token 数量, clip edges
-    L_res = x.shape[0] - 1  # 除去 prompt 节点
+    # Safe handling: clip edges if residue count < token count
+    L_res = x.shape[0] - 1
     if edge_index.numel() > 0:
         mask = (edge_index[0] < L_res) & (edge_index[1] < L_res)
         edge_index = edge_index[:, mask]
@@ -264,15 +253,14 @@ def seq2graph_with_prompt_save(id, seq, prompt_feat, id2repr, proj_layer=None, p
     graph.x = x
     graph.edge_index = edge_index
     graph.edge_attr = edge_attr
-    graph.batch = torch.zeros(x.shape[0], dtype=torch.long)  # 单图 batch=0
+    graph.batch = torch.zeros(x.shape[0], dtype=torch.long)
     return graph
 
-'''新添加的特征'''
-#计算小分子描述符值
+# Calculate molecular descriptors
 def calculate_molecule_descriptors(smiles):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return None  # 处理无效的SMILES字符串
+        return None
 
     qed = QED.properties(mol)
 
@@ -312,37 +300,35 @@ aa_properties = {
     'Y': [0.33, 0.02, 193.6],  # Tyrosine
 }
 
-#提取蛋白质序列的 ACC 特征
+# Extract ACC features from protein sequences
 def extract_acc_features(sequence, max_lag=6):
     """
-    提取蛋白质序列的 ACC 特征。
+    Extract ACC (Auto-Cross Covariance) features from protein sequences.
 
-    参数:
-        sequence (str): 蛋白质氨基酸序列。
-        max_lag (int): 最大延迟值，默认 5。
+    Args:
+        sequence (str): Protein amino acid sequence.
+        max_lag (int): Maximum lag value, default 6.
 
-    返回:
-        np.ndarray: 生成的 ACC 特征向量。
+    Returns:
+        np.ndarray: Generated ACC feature vector.
     """
 
-    # 将序列映射到属性矩阵
     def get_property_matrix(sequence, properties):
         matrix = []
         for aa in sequence:
             if aa in properties:
                 matrix.append(properties[aa])
             else:
-                matrix.append([0] * len(next(iter(properties.values()))))  # 未知氨基酸填0
+                matrix.append([0] * len(next(iter(properties.values()))))
         return np.array(matrix)
 
-    # 计算 ACC 特征
     def calculate_acc(property_matrix, max_lag):
         num_props, seq_len = property_matrix.shape[1], property_matrix.shape[0]
         acc_features = []
-        for k in range(num_props):  # 遍历每个属性
+        for k in range(num_props):
             prop_values = property_matrix[:, k]
             mean_k = np.mean(prop_values)
-            for tau in range(1, max_lag + 1):  # 遍历延迟
+            for tau in range(1, max_lag + 1):
                 if seq_len > tau:
                     cov = np.mean((prop_values[:seq_len - tau] - mean_k) *
                                   (prop_values[tau:] - mean_k))
@@ -351,12 +337,9 @@ def extract_acc_features(sequence, max_lag=6):
                     acc_features.append(0)
         return np.array(acc_features)
 
-    # 获取属性矩阵
     property_matrix = get_property_matrix(sequence, aa_properties)
-    # 计算 ACC 特征
     acc_features = calculate_acc(property_matrix, max_lag)
     return acc_features
-
 
 
 
@@ -369,6 +352,7 @@ def combine_descriptors(smiles, seq_a, seq_b):
         return np.concatenate([mol_desc, prot_a_desc, prot_b_desc])
     else:
         return None
+
 
 
 
@@ -387,21 +371,12 @@ def load_data(params):
         print("[INFO] Loading cached data.")
         with open(os.path.join("dataset", "processed.pkl"), 'rb') as file:
             data = pickle.load(file)
-            # while True:
-            #     try:
-            #         batch = pickle.load(f)
-            #         if isinstance(batch, list):
-            #             data.extend(batch)
-            #         else:
-            #             data.append(batch)
-            #     except EOFError:
-            #         break
         print(f"[INFO] Loaded {len(data)} samples from cache.")
     else:
         print(f"Cache not found, processing data...")
-        # Step 1: 读取full.csv
+        # Step 1: Load full.csv
         full = pd.read_excel(os.path.join("dataset", "Dataset7.xlsx"))
-        # Step 2: 构建蛋白序列字典（用 Uniprot ID 为键）
+        # Step 2: Build protein sequence dict (using Uniprot ID as key)
         seq_dict = {}
         for _, row in full.iterrows():
             seq_dict[row["Effector_Sequence_ID"]] = row["Effector Sequence"]
@@ -409,7 +384,7 @@ def load_data(params):
         prot_graphs = seqs2graphs(seq_dict)
         print("Graphs finished!")
 
-        # Step 4: 构建小分子图
+        # Step 4: Build small molecule graphs
         drug_graphs = smis2graphs(set(full["Smiles"].tolist()))
         print("Drug graphs finished!")
 
@@ -423,9 +398,6 @@ def load_data(params):
             smiles = row["Smiles"]
             label = row["label"]
             smiles_id = row["Smiles_ID"]
-            
-
-            # desc = combine_descriptors(smiles, e3_seq, poi_seq)
 
 
             if drug_graphs[smiles] and prot_graphs[e3_id] and  prot_graphs[poi_id] and not np.isnan(label):
@@ -438,12 +410,11 @@ def load_data(params):
             else:
                 print("[Warning] Skipping sample due to missing or invalid input:")
                 print(f"Current sample ID: e3:{e3_id}, poi:{poi_id}, smiles:{smiles_id}\n")
-                #data.append(None)
         print(f"Processing finished, length: {len(data)}")
         pickle.dump(data, open(os.path.join("dataset", "processed.pkl"), "wb"))
 
 
-    # Step 7: 划分训练/验证/测试集
+    # Step 7: Split train/valid/test
     for i, d in enumerate(data):
         if d is None:
             print(f"[DEBUG] None found at index {i}")
@@ -456,10 +427,3 @@ def load_data(params):
     train_data = tra_data[:start_idx] + tra_data[end_idx:]
 
     return train_data, valid_data, test_data
-
-
-
-
-
-
-

@@ -3,20 +3,21 @@ import pandas as pd
 import pickle
 from Bio.PDB import PDBParser
 from tqdm import tqdm
-# 配置路径
+
+# Path configuration
 xlsx_path = "Dataset7.xlsx"
 pdb_dir = "PDBs"
 esm_embed_path = "embeddings.pkl"
 
-# 加载 Excel
+# Load Excel
 df = pd.read_excel(xlsx_path)
 
-# 加载 ESM embedding
+# Load ESM embedding
 id2repr = pickle.load(open(esm_embed_path, "rb"))
 
 parser = PDBParser(QUIET=True)
 
-# 记录不匹配的条目
+# Track mismatches
 mismatch_list = []
 
 for idx, row in tqdm(df.iterrows(),total=len(df),desc="Checking sequences"):
@@ -40,11 +41,11 @@ for idx, row in tqdm(df.iterrows(),total=len(df),desc="Checking sequences"):
         seq_len = len(protein_seq)
         issue = None
 
-        # 检查序列长度与 ESM token 长度
+        # Check if sequence length matches ESM token length
         if seq_len != esm_len:
             issue = f"Seq_len != ESM_len ({seq_len} vs {esm_len})"
 
-        # 检查 PDB 文件
+        # Check PDB file
         pdb_file = os.path.join(pdb_dir, f"{pid}.pdb")
         if not os.path.exists(pdb_file):
             if issue:
@@ -70,7 +71,7 @@ for idx, row in tqdm(df.iterrows(),total=len(df),desc="Checking sequences"):
                     issue = ""
                 issue += f"PDB parse error: {e}"
 
-        # 如果有问题就记录
+        # Record issues
         if issue:
             mismatch_list.append({
                 "ID": row["ID"],
@@ -81,12 +82,10 @@ for idx, row in tqdm(df.iterrows(),total=len(df),desc="Checking sequences"):
                 "Issue": issue
             })
 
-# 输出结果
+# Output results
 if mismatch_list:
     mismatch_df = pd.DataFrame(mismatch_list)
-    print("发现以下异常条目：")
+    print("Found the following mismatches:")
     print(mismatch_df)
 else:
-    print("所有序列、ESM token 和 PDB 残基长度均匹配。")
-
-
+    print("All sequences, ESM tokens, and PDB residue lengths match.")

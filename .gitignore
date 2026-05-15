@@ -1,11 +1,11 @@
-# 数据文件（太大，不上传）
+# Data files (too large to upload)
 dataset/*.pkl
 dataset/PDBs/
 
-# 模型权重
+# Model weights
 pts/*.pt
 
-# 日志
+# Logs
 logs/
 
 # Python
