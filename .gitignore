@@ -1,0 +1,20 @@
+# 数据文件（太大，不上传）
+dataset/*.pkl
+dataset/*.xlsx
+dataset/PDBs/
+
+# 模型权重
+pts/*.pt
+
+# 日志
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
